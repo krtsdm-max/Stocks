@@ -284,12 +284,37 @@ def calculate_portfolio_metrics(positions: list[dict]) -> dict:
 
 
 def validate_ticker(ticker: str) -> bool:
-    """Quick check that ticker is valid on Yahoo Finance."""
+    """Check that ticker is valid on Yahoo Finance. Tries multiple strategies."""
     try:
         tk = yf.Ticker(ticker)
-        info = tk.fast_info
-        return info.last_price is not None and info.last_price > 0
-    except Exception:
+
+        # Strategy 1: fast_info (cheapest call)
+        try:
+            price = tk.fast_info.last_price
+            if price and price > 0:
+                return True
+        except Exception:
+            pass
+
+        # Strategy 2: recent history (most reliable)
+        try:
+            hist = tk.history(period="5d")
+            if not hist.empty:
+                return True
+        except Exception:
+            pass
+
+        # Strategy 3: info dict — exchange presence means ticker exists
+        try:
+            info = tk.info
+            if info.get("exchange") or info.get("regularMarketPrice") or info.get("currentPrice"):
+                return True
+        except Exception:
+            pass
+
+        return False
+    except Exception as e:
+        logger.error(f"validate_ticker error for {ticker}: {e}")
         return False
 
 
