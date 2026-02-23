@@ -28,6 +28,7 @@ export function ChatInterface({ defaultTicker }: Props) {
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [ticker, setTicker] = useState(defaultTicker ?? '');
+  const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -56,6 +57,7 @@ export function ChatInterface({ defaultTicker }: Props) {
     const msg = input.trim();
     setInput('');
     setSending(true);
+    setError(null);
 
     try {
       const response = await sendChatMessage({
@@ -65,6 +67,13 @@ export function ChatInterface({ defaultTicker }: Props) {
       });
       setMessages(prev => [...prev, response]);
       if (!sessionId) setSessionId(response.session_id);
+    } catch (err: unknown) {
+      const isTimeout = err instanceof Error && err.message.toLowerCase().includes('timeout');
+      setError(isTimeout
+        ? 'Request timed out — the experts are taking too long. Please try again.'
+        : 'Failed to get a response. Please check your connection and try again.'
+      );
+      setInput(msg);
     } finally {
       setSending(false);
     }
@@ -165,6 +174,14 @@ export function ChatInterface({ defaultTicker }: Props) {
 
         <div ref={bottomRef} />
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="bg-red-50 border-x border-red-200 px-4 py-2 flex items-center justify-between">
+          <span className="text-xs text-red-600">{error}</span>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 text-xs ml-4">✕</button>
+        </div>
+      )}
 
       {/* Input */}
       <div className="bg-white rounded-b-xl border border-t border-gray-200 p-4">

@@ -9,6 +9,12 @@ const api = axios.create({
   timeout: 30000,
 });
 
+// Chat endpoint needs more time — 3 parallel LLM calls can take up to 60s
+const chatApi = axios.create({
+  baseURL: '/api',
+  timeout: 90000,
+});
+
 // ── Portfolio ──────────────────────────────────────────────────────────────────
 export const getPortfolio = (): Promise<Portfolio> =>
   api.get('/portfolio').then(r => r.data);
@@ -59,10 +65,10 @@ export const sendChatMessage = (data: {
   session_id?: string;
   position_ticker?: string;
 }): Promise<ChatMessage> =>
-  api.post('/chat', data).then(r => r.data);
+  chatApi.post('/chat', data).then(r => r.data);
 
 export const getChatHistory = (sessionId?: string, limit = 20): Promise<ChatMessage[]> =>
-  api.get('/chat/history', { params: { session_id: sessionId, limit } }).then(r => r.data);
+  chatApi.get('/chat/history', { params: { session_id: sessionId, limit } }).then(r => r.data);
 
 // ── Experts ────────────────────────────────────────────────────────────────────
 export const getExpertTrackRecord = (expertType: string): Promise<TrackRecord> =>
