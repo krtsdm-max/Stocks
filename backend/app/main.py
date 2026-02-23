@@ -63,6 +63,12 @@ def health():
 
 @app.get("/api/validate-ticker/{ticker}")
 def validate_ticker(ticker: str):
-    from app.services.market_data import validate_ticker as vt
-    valid = vt(ticker.upper())
-    return {"ticker": ticker.upper(), "valid": valid}
+    from app.services.market_data import lookup_ticker
+    info = lookup_ticker(ticker.upper())
+    return {
+        "ticker": ticker.upper(),
+        "valid": info["valid"],
+        "name": info.get("name"),
+        "price": info.get("price"),
+        "exchange": info.get("exchange"),
+    }

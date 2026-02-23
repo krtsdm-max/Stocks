@@ -18,6 +18,7 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
   });
   const [validating, setValidating] = useState(false);
   const [tickerValid, setTickerValid] = useState<boolean | null>(null);
+  const [tickerInfo, setTickerInfo] = useState<{ name: string; price: number; exchange: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -25,11 +26,16 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
     if (!form.ticker) return;
     setValidating(true);
     setTickerValid(null);
+    setTickerInfo(null);
     try {
       const res = await validateTicker(form.ticker);
       setTickerValid(res.valid);
-      if (!res.valid) setError(`Ticker "${form.ticker}" not found. Please check the symbol and try again.`);
-      else setError('');
+      if (res.valid && res.name && res.price) {
+        setTickerInfo({ name: res.name, price: res.price, exchange: res.exchange ?? '' });
+        setError('');
+      } else if (!res.valid) {
+        setError(`Ticker "${form.ticker}" not found. Please check the symbol and try again.`);
+      }
     } catch {
       // Network error — let the backend decide, don't block the user
       setTickerValid(true);
@@ -86,7 +92,7 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
               <input
                 type="text"
                 value={form.ticker}
-                onChange={e => { setForm(f => ({ ...f, ticker: e.target.value.toUpperCase() })); setTickerValid(null); }}
+                onChange={e => { setForm(f => ({ ...f, ticker: e.target.value.toUpperCase() })); setTickerValid(null); setTickerInfo(null); setError(''); }}
                 onBlur={handleTickerBlur}
                 placeholder="e.g. AAPL"
                 required
@@ -99,6 +105,19 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
               </span>
             </div>
           </div>
+
+          {tickerInfo && (
+            <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+              <CheckCircle size={16} className="text-green-500 flex-none" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-green-800 truncate">{tickerInfo.name}</p>
+                <p className="text-xs text-green-600">
+                  ${tickerInfo.price.toFixed(2)}
+                  {tickerInfo.exchange && <span className="ml-1 opacity-70">· {tickerInfo.exchange}</span>}
+                </p>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <div>

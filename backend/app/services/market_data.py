@@ -284,59 +284,83 @@ def calculate_portfolio_metrics(positions: list[dict]) -> dict:
 
 
 import re as _re
+import httpx as _httpx
 
 # Valid ticker pattern: 1-5 uppercase letters, optionally followed by
 # a dot/dash suffix for share classes or ETFs (e.g. BRK.B, BF-B)
 _TICKER_RE = _re.compile(r'^[A-Z]{1,5}([.\-][A-Z]{1,2})?$')
 
+_YF_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
 
-def validate_ticker(ticker: str) -> bool:
-    """Validate ticker symbol.
 
-    Step 1: format check (fast, offline) — rejects obvious garbage like
-            'ABC123', '!!', empty strings, etc.
-    Step 2: try Yahoo Finance to confirm the symbol actually trades.
-            If Yahoo is unreachable (network error), fall back to format-only
-            validation so Docker/firewall issues don't block users.
+def lookup_ticker(ticker: str) -> dict:
+    """Return {'valid': bool, 'name': str|None, 'price': float|None, 'exchange': str|None}.
+
+    Uses the Yahoo Finance v8 chart API directly via httpx — no crumb/cookie
+    handshake required, works in Docker environments where yfinance may fail.
+    Falls back to yfinance if the direct call fails.
     """
     t = ticker.strip().upper()
 
-    # Fast offline check — reject non-ticker strings immediately
     if not _TICKER_RE.match(t):
-        return False
+        return {"valid": False, "name": None, "price": None, "exchange": None}
 
-    # Online confirmation
+    # --- Strategy 1: direct Yahoo Finance v8 chart API (no crumb needed) ---
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{t}"
+        with _httpx.Client(timeout=8.0, follow_redirects=True) as client:
+            resp = client.get(url, params={"interval": "1d", "range": "5d"}, headers=_YF_HEADERS)
+        if resp.status_code == 200:
+            data = resp.json()
+            result = (data.get("chart") or {}).get("result") or []
+            if result:
+                meta = result[0].get("meta", {})
+                price = meta.get("regularMarketPrice") or meta.get("previousClose")
+                name = meta.get("longName") or meta.get("shortName") or t
+                exchange = meta.get("exchangeName") or meta.get("fullExchangeName")
+                if price:
+                    return {"valid": True, "name": name, "price": float(price), "exchange": exchange}
+    except Exception as e:
+        logger.debug(f"lookup_ticker direct HTTP failed for {t}: {e}")
+
+    # --- Strategy 2: yfinance fallback ---
     try:
         tk = yf.Ticker(t)
-
-        try:
-            price = tk.fast_info.last_price
-            if price and price > 0:
-                return True
-        except Exception:
-            pass
-
-        try:
-            hist = tk.history(period="5d")
-            if not hist.empty:
-                return True
-        except Exception:
-            pass
-
-        try:
-            info = tk.info
-            if info.get("exchange") or info.get("regularMarketPrice") or info.get("currentPrice"):
-                return True
-        except Exception:
-            pass
-
-        # Yahoo returned nothing for this symbol — treat as invalid
-        return False
-
+        info = tk.fast_info
+        price = info.last_price
+        if price and price > 0:
+            full = tk.info
+            name = full.get("longName") or full.get("shortName") or t
+            exchange = full.get("exchange")
+            return {"valid": True, "name": name, "price": float(price), "exchange": exchange}
     except Exception as e:
-        # Network / connectivity error — format already passed, allow it
-        logger.warning(f"validate_ticker: cannot reach Yahoo Finance for {t}: {e}. Accepting based on format.")
-        return True
+        logger.debug(f"lookup_ticker yfinance fallback failed for {t}: {e}")
+
+    # --- Strategy 3: history check ---
+    try:
+        tk = yf.Ticker(t)
+        hist = tk.history(period="5d")
+        if not hist.empty:
+            price = float(hist["Close"].iloc[-1])
+            full = tk.info
+            name = full.get("longName") or full.get("shortName") or t
+            return {"valid": True, "name": name, "price": price, "exchange": full.get("exchange")}
+    except Exception as e:
+        logger.debug(f"lookup_ticker history check failed for {t}: {e}")
+
+    # All online checks failed — ticker not found
+    return {"valid": False, "name": None, "price": None, "exchange": None}
+
+
+def validate_ticker(ticker: str) -> bool:
+    return lookup_ticker(ticker)["valid"]
 
 
 def get_sector_median_pe(sector: str) -> Optional[float]:

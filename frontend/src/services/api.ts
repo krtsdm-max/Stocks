@@ -46,7 +46,13 @@ export const updatePosition = (id: number, data: Partial<{
 export const deletePosition = (id: number): Promise<void> =>
   api.delete(`/positions/${id}`).then(r => r.data);
 
-export const validateTicker = (ticker: string): Promise<{ ticker: string; valid: boolean }> =>
+export const validateTicker = (ticker: string): Promise<{
+  ticker: string;
+  valid: boolean;
+  name: string | null;
+  price: number | null;
+  exchange: string | null;
+}> =>
   api.get(`/validate-ticker/${ticker}`).then(r => r.data);
 
 // ── Recommendations ────────────────────────────────────────────────────────────
