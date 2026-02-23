@@ -284,7 +284,12 @@ def calculate_portfolio_metrics(positions: list[dict]) -> dict:
 
 
 def validate_ticker(ticker: str) -> bool:
-    """Check that ticker is valid on Yahoo Finance. Tries multiple strategies."""
+    """Check that ticker exists on Yahoo Finance.
+
+    Returns True when the ticker is confirmed valid OR when Yahoo Finance
+    is unreachable (fail-open so users are not blocked by network issues).
+    Returns False only when Yahoo explicitly returns no data for the symbol.
+    """
     try:
         tk = yf.Ticker(ticker)
 
@@ -312,10 +317,13 @@ def validate_ticker(ticker: str) -> bool:
         except Exception:
             pass
 
+        # All strategies returned empty — ticker genuinely not found
         return False
+
     except Exception as e:
-        logger.error(f"validate_ticker error for {ticker}: {e}")
-        return False
+        # Network / connectivity error — fail open so users aren't blocked
+        logger.warning(f"validate_ticker: cannot reach Yahoo Finance for {ticker}: {e}. Allowing ticker.")
+        return True
 
 
 def get_sector_median_pe(sector: str) -> Optional[float]:

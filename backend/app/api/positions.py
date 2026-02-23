@@ -72,8 +72,6 @@ def list_positions(db: Session = Depends(get_db)):
 
 @router.post("", response_model=PositionResponse, status_code=status.HTTP_201_CREATED)
 def create_position(data: PositionCreate, db: Session = Depends(get_db)):
-    if not md.validate_ticker(data.ticker):
-        raise HTTPException(status_code=400, detail=f"Invalid ticker: {data.ticker}")
 
     pos = Position(
         ticker=data.ticker,
