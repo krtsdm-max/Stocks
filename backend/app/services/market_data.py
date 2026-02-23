@@ -283,17 +283,32 @@ def calculate_portfolio_metrics(positions: list[dict]) -> dict:
     }
 
 
+import re as _re
+
+# Valid ticker pattern: 1-5 uppercase letters, optionally followed by
+# a dot/dash suffix for share classes or ETFs (e.g. BRK.B, BF-B)
+_TICKER_RE = _re.compile(r'^[A-Z]{1,5}([.\-][A-Z]{1,2})?$')
+
+
 def validate_ticker(ticker: str) -> bool:
-    """Check that ticker exists on Yahoo Finance.
+    """Validate ticker symbol.
 
-    Returns True when the ticker is confirmed valid OR when Yahoo Finance
-    is unreachable (fail-open so users are not blocked by network issues).
-    Returns False only when Yahoo explicitly returns no data for the symbol.
+    Step 1: format check (fast, offline) — rejects obvious garbage like
+            'ABC123', '!!', empty strings, etc.
+    Step 2: try Yahoo Finance to confirm the symbol actually trades.
+            If Yahoo is unreachable (network error), fall back to format-only
+            validation so Docker/firewall issues don't block users.
     """
-    try:
-        tk = yf.Ticker(ticker)
+    t = ticker.strip().upper()
 
-        # Strategy 1: fast_info (cheapest call)
+    # Fast offline check — reject non-ticker strings immediately
+    if not _TICKER_RE.match(t):
+        return False
+
+    # Online confirmation
+    try:
+        tk = yf.Ticker(t)
+
         try:
             price = tk.fast_info.last_price
             if price and price > 0:
@@ -301,7 +316,6 @@ def validate_ticker(ticker: str) -> bool:
         except Exception:
             pass
 
-        # Strategy 2: recent history (most reliable)
         try:
             hist = tk.history(period="5d")
             if not hist.empty:
@@ -309,7 +323,6 @@ def validate_ticker(ticker: str) -> bool:
         except Exception:
             pass
 
-        # Strategy 3: info dict — exchange presence means ticker exists
         try:
             info = tk.info
             if info.get("exchange") or info.get("regularMarketPrice") or info.get("currentPrice"):
@@ -317,12 +330,12 @@ def validate_ticker(ticker: str) -> bool:
         except Exception:
             pass
 
-        # All strategies returned empty — ticker genuinely not found
+        # Yahoo returned nothing for this symbol — treat as invalid
         return False
 
     except Exception as e:
-        # Network / connectivity error — fail open so users aren't blocked
-        logger.warning(f"validate_ticker: cannot reach Yahoo Finance for {ticker}: {e}. Allowing ticker.")
+        # Network / connectivity error — format already passed, allow it
+        logger.warning(f"validate_ticker: cannot reach Yahoo Finance for {t}: {e}. Accepting based on format.")
         return True
 
 

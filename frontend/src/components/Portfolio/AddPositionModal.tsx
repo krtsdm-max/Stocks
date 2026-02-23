@@ -28,12 +28,11 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
     try {
       const res = await validateTicker(form.ticker);
       setTickerValid(res.valid);
-      // Show a warning but don't set error — user can still submit
-      if (!res.valid) setError(`Warning: "${form.ticker}" was not confirmed on Yahoo Finance. You can still add it manually.`);
+      if (!res.valid) setError(`Ticker "${form.ticker}" not found. Please check the symbol and try again.`);
       else setError('');
     } catch {
-      // Network error — don't penalise the user, treat as unknown
-      setTickerValid(null);
+      // Network error — let the backend decide, don't block the user
+      setTickerValid(true);
       setError('');
     } finally {
       setValidating(false);
@@ -75,11 +74,7 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {error && (
-            <div className={`flex items-center gap-2 rounded-lg p-3 text-sm ${
-              error.startsWith('Warning:')
-                ? 'text-amber-700 bg-amber-50'
-                : 'text-red-600 bg-red-50'
-            }`}>
+            <div className="flex items-center gap-2 text-red-600 bg-red-50 rounded-lg p-3 text-sm">
               <AlertCircle size={16} className="flex-none" />
               {error}
             </div>
@@ -161,7 +156,7 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
               className="flex-1 border border-gray-300 text-gray-700 rounded-lg py-2 text-sm font-medium hover:bg-gray-50">
               Cancel
             </button>
-            <button type="submit" disabled={saving || validating}
+            <button type="submit" disabled={saving || validating || tickerValid === false}
               className="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
               {saving ? <><InlineSpinner /> Adding...</> : 'Add Position'}
             </button>
