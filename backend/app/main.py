@@ -62,12 +62,13 @@ def health():
 
 
 @app.get("/api/validate-ticker/{ticker}")
-def validate_ticker(ticker: str):
+def validate_ticker_endpoint(ticker: str):
     from app.services.market_data import lookup_ticker
     info = lookup_ticker(ticker.upper())
+    # valid: True = confirmed, False = not found, None = network unavailable
     return {
         "ticker": ticker.upper(),
-        "valid": info["valid"],
+        "valid": info["valid"],   # null in JSON when network unavailable
         "name": info.get("name"),
         "price": info.get("price"),
         "exchange": info.get("exchange"),

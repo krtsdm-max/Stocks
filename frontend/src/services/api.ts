@@ -48,7 +48,7 @@ export const deletePosition = (id: number): Promise<void> =>
 
 export const validateTicker = (ticker: string): Promise<{
   ticker: string;
-  valid: boolean;
+  valid: boolean | null;  // null = network unavailable
   name: string | null;
   price: number | null;
   exchange: string | null;

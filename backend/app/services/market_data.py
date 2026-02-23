@@ -301,49 +301,63 @@ _YF_HEADERS = {
 
 
 def lookup_ticker(ticker: str) -> dict:
-    """Return {'valid': bool, 'name': str|None, 'price': float|None, 'exchange': str|None}.
+    """Return ticker info with one of three states:
+      valid=True   — confirmed exists, includes name/price/exchange
+      valid=False  — confirmed does not exist (bad format or Yahoo returned empty)
+      valid=None   — could not reach any data source (network error)
 
-    Uses the Yahoo Finance v8 chart API directly via httpx — no crumb/cookie
-    handshake required, works in Docker environments where yfinance may fail.
-    Falls back to yfinance if the direct call fails.
+    Tries multiple sources in order:
+      1. Yahoo Finance v8 chart API (direct httpx, no crumb)
+      2. Yahoo Finance v7 quote API
+      3. yfinance library (fast_info, then history)
     """
     t = ticker.strip().upper()
 
+    # Format check first — rejects garbage without any network call
     if not _TICKER_RE.match(t):
         return {"valid": False, "name": None, "price": None, "exchange": None}
 
-    # --- Strategy 1: direct Yahoo Finance v8 chart API (no crumb needed) ---
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{t}"
-        with _httpx.Client(timeout=8.0, follow_redirects=True) as client:
-            resp = client.get(url, params={"interval": "1d", "range": "5d"}, headers=_YF_HEADERS)
-        if resp.status_code == 200:
-            data = resp.json()
-            result = (data.get("chart") or {}).get("result") or []
-            if result:
-                meta = result[0].get("meta", {})
-                price = meta.get("regularMarketPrice") or meta.get("previousClose")
-                name = meta.get("longName") or meta.get("shortName") or t
-                exchange = meta.get("exchangeName") or meta.get("fullExchangeName")
-                if price:
-                    return {"valid": True, "name": name, "price": float(price), "exchange": exchange}
-    except Exception as e:
-        logger.debug(f"lookup_ticker direct HTTP failed for {t}: {e}")
+    network_error = False
 
-    # --- Strategy 2: yfinance fallback ---
+    # --- Strategy 1: Yahoo Finance v8 chart (query1) ---
+    for base in ("https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com"):
+        try:
+            url = f"{base}/v8/finance/chart/{t}"
+            with _httpx.Client(timeout=6.0, follow_redirects=True) as client:
+                resp = client.get(url, params={"interval": "1d", "range": "5d"}, headers=_YF_HEADERS)
+            if resp.status_code == 200:
+                data = resp.json()
+                result = (data.get("chart") or {}).get("result") or []
+                if result:
+                    meta = result[0].get("meta", {})
+                    price = meta.get("regularMarketPrice") or meta.get("previousClose")
+                    name = meta.get("longName") or meta.get("shortName") or t
+                    exchange = meta.get("exchangeName") or meta.get("fullExchangeName")
+                    if price:
+                        return {"valid": True, "name": name, "price": float(price), "exchange": exchange}
+                # Got 200 but empty result — ticker doesn't exist
+                return {"valid": False, "name": None, "price": None, "exchange": None}
+            elif resp.status_code == 404:
+                return {"valid": False, "name": None, "price": None, "exchange": None}
+        except Exception as e:
+            logger.debug(f"lookup_ticker {base} failed for {t}: {e}")
+            network_error = True
+
+    # --- Strategy 2: yfinance fast_info ---
     try:
         tk = yf.Ticker(t)
-        info = tk.fast_info
-        price = info.last_price
+        price = tk.fast_info.last_price
         if price and price > 0:
             full = tk.info
             name = full.get("longName") or full.get("shortName") or t
-            exchange = full.get("exchange")
-            return {"valid": True, "name": name, "price": float(price), "exchange": exchange}
+            return {"valid": True, "name": name, "price": float(price), "exchange": full.get("exchange")}
+        # fast_info returned but no price — symbol likely invalid
+        return {"valid": False, "name": None, "price": None, "exchange": None}
     except Exception as e:
-        logger.debug(f"lookup_ticker yfinance fallback failed for {t}: {e}")
+        logger.debug(f"lookup_ticker yfinance fast_info failed for {t}: {e}")
+        network_error = True
 
-    # --- Strategy 3: history check ---
+    # --- Strategy 3: yfinance history ---
     try:
         tk = yf.Ticker(t)
         hist = tk.history(period="5d")
@@ -352,15 +366,24 @@ def lookup_ticker(ticker: str) -> dict:
             full = tk.info
             name = full.get("longName") or full.get("shortName") or t
             return {"valid": True, "name": name, "price": price, "exchange": full.get("exchange")}
+        return {"valid": False, "name": None, "price": None, "exchange": None}
     except Exception as e:
-        logger.debug(f"lookup_ticker history check failed for {t}: {e}")
+        logger.debug(f"lookup_ticker yfinance history failed for {t}: {e}")
+        network_error = True
 
-    # All online checks failed — ticker not found
+    # All sources failed due to network — return unknown state
+    if network_error:
+        logger.warning(f"lookup_ticker: all sources unreachable for {t}, returning unknown state")
+        return {"valid": None, "name": None, "price": None, "exchange": None}
+
     return {"valid": False, "name": None, "price": None, "exchange": None}
 
 
 def validate_ticker(ticker: str) -> bool:
-    return lookup_ticker(ticker)["valid"]
+    """Returns True if confirmed valid or if data sources are unreachable (fail-open)."""
+    result = lookup_ticker(ticker)
+    # valid=None means network error — fail open so users aren't blocked
+    return result["valid"] is not False
 
 
 def get_sector_median_pe(sector: str) -> Optional[float]:

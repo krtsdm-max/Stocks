@@ -17,7 +17,8 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
     notes: '',
   });
   const [validating, setValidating] = useState(false);
-  const [tickerValid, setTickerValid] = useState<boolean | null>(null);
+  // null = not checked yet, true = confirmed, false = not found, 'unknown' = network error
+  const [tickerState, setTickerState] = useState<true | false | 'unknown' | null>(null);
   const [tickerInfo, setTickerInfo] = useState<{ name: string; price: number; exchange: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -25,21 +26,25 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
   const handleTickerBlur = async () => {
     if (!form.ticker) return;
     setValidating(true);
-    setTickerValid(null);
+    setTickerState(null);
     setTickerInfo(null);
+    setError('');
     try {
       const res = await validateTicker(form.ticker);
-      setTickerValid(res.valid);
-      if (res.valid && res.name && res.price) {
-        setTickerInfo({ name: res.name, price: res.price, exchange: res.exchange ?? '' });
-        setError('');
-      } else if (!res.valid) {
-        setError(`Ticker "${form.ticker}" not found. Please check the symbol and try again.`);
+      if (res.valid === true) {
+        setTickerState(true);
+        if (res.name && res.price) {
+          setTickerInfo({ name: res.name, price: res.price, exchange: res.exchange ?? '' });
+        }
+      } else if (res.valid === false) {
+        setTickerState(false);
+        setError(`Ticker "${form.ticker}" not found. Please check the symbol.`);
+      } else {
+        // valid === null → market data unavailable
+        setTickerState('unknown');
       }
     } catch {
-      // Network error — let the backend decide, don't block the user
-      setTickerValid(true);
-      setError('');
+      setTickerState('unknown');
     } finally {
       setValidating(false);
     }
@@ -92,7 +97,7 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
               <input
                 type="text"
                 value={form.ticker}
-                onChange={e => { setForm(f => ({ ...f, ticker: e.target.value.toUpperCase() })); setTickerValid(null); setTickerInfo(null); setError(''); }}
+                onChange={e => { setForm(f => ({ ...f, ticker: e.target.value.toUpperCase() })); setTickerState(null); setTickerInfo(null); setError(''); }}
                 onBlur={handleTickerBlur}
                 placeholder="e.g. AAPL"
                 required
@@ -100,8 +105,9 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
               />
               <span className="absolute right-2 top-1/2 -translate-y-1/2">
                 {validating && <InlineSpinner />}
-                {!validating && tickerValid === true && <CheckCircle size={16} className="text-green-500" />}
-                {!validating && tickerValid === false && <AlertCircle size={16} className="text-red-500" />}
+                {!validating && tickerState === true && <CheckCircle size={16} className="text-green-500" />}
+                {!validating && tickerState === false && <AlertCircle size={16} className="text-red-500" />}
+                {!validating && tickerState === 'unknown' && <AlertCircle size={16} className="text-amber-400" />}
               </span>
             </div>
           </div>
