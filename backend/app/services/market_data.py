@@ -10,7 +10,6 @@ import httpx as _httpx
 import numpy as np
 import pandas as pd
 import redis
-import requests as _requests
 import yfinance as yf
 from app.config import settings
 
@@ -62,42 +61,6 @@ def invalidate_price_cache(tickers: list[str]) -> None:
         logger.warning(f"Cache invalidation error: {e}")
 
 
-_yf_session_lock = threading.Lock()
-_yf_session_state: dict = {"session": None, "expires": 0.0}
-
-_YF_REQ_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://finance.yahoo.com/",
-}
-
-
-def _get_yf_session() -> _requests.Session:
-    """Return a requests.Session pre-loaded with Yahoo Finance cookies.
-    Refreshed at most once per hour so we don't hammer the consent page.
-    """
-    with _yf_session_lock:
-        now = time.monotonic()
-        if _yf_session_state["session"] and now < _yf_session_state["expires"]:
-            return _yf_session_state["session"]
-
-        sess = _requests.Session()
-        sess.headers.update(_YF_REQ_HEADERS)
-        try:
-            r = sess.get("https://finance.yahoo.com", timeout=8)
-            r.raise_for_status()
-            logger.debug("yfinance session cookies refreshed")
-        except Exception as e:
-            logger.warning(f"_get_yf_session: failed to seed cookies: {e}")
-
-        _yf_session_state.update({"session": sess, "expires": now + 3600.0})
-        return sess
-
 
 def get_current_price(ticker: str) -> Optional[dict]:
     """Returns current price + day change for a ticker."""
@@ -107,8 +70,7 @@ def get_current_price(ticker: str) -> Optional[dict]:
         return cached
 
     try:
-        sess = _get_yf_session()
-        tk = yf.Ticker(ticker, session=sess)
+        tk = yf.Ticker(ticker)
         info = tk.fast_info
         current_price = None
         try:
@@ -149,8 +111,7 @@ def get_historical_data(ticker: str, period: str = "1y") -> Optional[pd.DataFram
         return df
 
     try:
-        sess = _get_yf_session()
-        tk = yf.Ticker(ticker, session=sess)
+        tk = yf.Ticker(ticker)
         df = tk.history(period=period)
         if df.empty:
             return None
@@ -170,8 +131,7 @@ def get_fundamentals(ticker: str) -> Optional[dict]:
         return cached
 
     try:
-        sess = _get_yf_session()
-        tk = yf.Ticker(ticker, session=sess)
+        tk = yf.Ticker(ticker)
         info = tk.info
 
         def safe_float(val):
@@ -506,8 +466,7 @@ def lookup_ticker(ticker: str) -> dict:
 
     # --- Strategy 2: yfinance fast_info ---
     try:
-        sess = _get_yf_session()
-        tk = yf.Ticker(t, session=sess)
+        tk = yf.Ticker(t)
         price = tk.fast_info.last_price
         if price and price > 0:
             full = tk.info
@@ -521,8 +480,7 @@ def lookup_ticker(ticker: str) -> dict:
 
     # --- Strategy 3: yfinance history ---
     try:
-        sess = _get_yf_session()
-        tk = yf.Ticker(t, session=sess)
+        tk = yf.Ticker(t)
         hist = tk.history(period="5d")
         if not hist.empty:
             price = float(hist["Close"].iloc[-1])
