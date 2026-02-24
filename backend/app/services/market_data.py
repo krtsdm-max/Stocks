@@ -1,11 +1,16 @@
 import json
 import logging
+import re as _re
+import time
+import threading
 from datetime import datetime, timedelta
 from typing import Optional
 
+import httpx as _httpx
 import numpy as np
 import pandas as pd
 import redis
+import requests as _requests
 import yfinance as yf
 from app.config import settings
 
@@ -44,6 +49,43 @@ def _cache_set(key: str, data: dict, ttl: int) -> None:
         logger.warning(f"Redis set error: {e}")
 
 
+_yf_session_lock = threading.Lock()
+_yf_session_state: dict = {"session": None, "expires": 0.0}
+
+_YF_REQ_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://finance.yahoo.com/",
+}
+
+
+def _get_yf_session() -> _requests.Session:
+    """Return a requests.Session pre-loaded with Yahoo Finance cookies.
+    Refreshed at most once per hour so we don't hammer the consent page.
+    """
+    with _yf_session_lock:
+        now = time.monotonic()
+        if _yf_session_state["session"] and now < _yf_session_state["expires"]:
+            return _yf_session_state["session"]
+
+        sess = _requests.Session()
+        sess.headers.update(_YF_REQ_HEADERS)
+        try:
+            r = sess.get("https://finance.yahoo.com", timeout=8)
+            r.raise_for_status()
+            logger.debug("yfinance session cookies refreshed")
+        except Exception as e:
+            logger.warning(f"_get_yf_session: failed to seed cookies: {e}")
+
+        _yf_session_state.update({"session": sess, "expires": now + 3600.0})
+        return sess
+
+
 def get_current_price(ticker: str) -> Optional[dict]:
     """Returns current price + day change for a ticker."""
     key = _cache_key("price", ticker)
@@ -52,12 +94,23 @@ def get_current_price(ticker: str) -> Optional[dict]:
         return cached
 
     try:
-        tk = yf.Ticker(ticker)
+        sess = _get_yf_session()
+        tk = yf.Ticker(ticker, session=sess)
         info = tk.fast_info
+        current_price = None
+        try:
+            current_price = float(info.last_price) if info.last_price else None
+        except Exception:
+            pass
+        previous_close = None
+        try:
+            previous_close = float(info.previous_close) if info.previous_close else None
+        except Exception:
+            pass
         data = {
             "ticker": ticker,
-            "current_price": float(info.last_price) if info.last_price else None,
-            "previous_close": float(info.previous_close) if info.previous_close else None,
+            "current_price": current_price,
+            "previous_close": previous_close,
             "day_change": None,
             "day_change_pct": None,
             "timestamp": datetime.utcnow().isoformat(),
@@ -65,7 +118,8 @@ def get_current_price(ticker: str) -> Optional[dict]:
         if data["current_price"] and data["previous_close"]:
             data["day_change"] = data["current_price"] - data["previous_close"]
             data["day_change_pct"] = (data["day_change"] / data["previous_close"]) * 100
-        _cache_set(key, data, settings.PRICE_CACHE_TTL)
+        if data["current_price"] is not None:
+            _cache_set(key, data, settings.PRICE_CACHE_TTL)
         return data
     except Exception as e:
         logger.error(f"Error fetching price for {ticker}: {e}")
@@ -82,7 +136,8 @@ def get_historical_data(ticker: str, period: str = "1y") -> Optional[pd.DataFram
         return df
 
     try:
-        tk = yf.Ticker(ticker)
+        sess = _get_yf_session()
+        tk = yf.Ticker(ticker, session=sess)
         df = tk.history(period=period)
         if df.empty:
             return None
@@ -102,7 +157,8 @@ def get_fundamentals(ticker: str) -> Optional[dict]:
         return cached
 
     try:
-        tk = yf.Ticker(ticker)
+        sess = _get_yf_session()
+        tk = yf.Ticker(ticker, session=sess)
         info = tk.info
 
         def safe_float(val):
@@ -283,9 +339,6 @@ def calculate_portfolio_metrics(positions: list[dict]) -> dict:
     }
 
 
-import re as _re
-import httpx as _httpx
-
 # Valid ticker pattern: 1-5 uppercase letters, optionally followed by
 # a dot/dash suffix for share classes or ETFs (e.g. BRK.B, BF-B)
 _TICKER_RE = _re.compile(r'^[A-Z]{1,5}([.\-][A-Z]{1,2})?$')
@@ -296,20 +349,97 @@ _YF_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://finance.yahoo.com",
+    "Referer": "https://finance.yahoo.com/",
 }
+
+# ---------------------------------------------------------------------------
+# Yahoo Finance crumb / cookie session (refreshed once per hour)
+# ---------------------------------------------------------------------------
+_crumb_lock = threading.Lock()
+_crumb_state: dict = {"crumb": None, "cookies": {}, "expires": 0.0}
+
+
+def _get_yf_crumb() -> tuple[str | None, dict]:
+    """Return (crumb, cookies) for Yahoo Finance API calls.
+    Fetches a fresh crumb at most once per hour; cached otherwise.
+    Returns (None, {}) on any failure — callers must tolerate absent crumb.
+    """
+    with _crumb_lock:
+        now = time.monotonic()
+        if _crumb_state["crumb"] and now < _crumb_state["expires"]:
+            return _crumb_state["crumb"], _crumb_state["cookies"]
+
+        crumb: str | None = None
+        cookies: dict = {}
+        try:
+            with _httpx.Client(timeout=8.0, follow_redirects=True) as client:
+                # Step 1 — land on finance.yahoo.com to collect consent cookies
+                r = client.get("https://finance.yahoo.com", headers=_YF_HEADERS)
+                cookies = dict(r.cookies)
+
+                # Step 2 — fetch crumb using the session cookies
+                cr = client.get(
+                    "https://query2.finance.yahoo.com/v1/test/getcrumb",
+                    headers=_YF_HEADERS,
+                    cookies=cookies,
+                )
+                if cr.status_code == 200 and cr.text and cr.text.strip() not in ("", "null"):
+                    crumb = cr.text.strip()
+                    logger.debug(f"Yahoo Finance crumb acquired: {crumb[:6]}…")
+        except Exception as e:
+            logger.warning(f"_get_yf_crumb failed: {e}")
+
+        _crumb_state.update({"crumb": crumb, "cookies": cookies, "expires": now + 3600.0})
+        return crumb, cookies
+
+
+# ---------------------------------------------------------------------------
+# Minimal token-bucket rate-limiter — max 2 requests/sec to Yahoo Finance
+# ---------------------------------------------------------------------------
+_rl_lock = threading.Lock()
+_rl_tokens: float = 2.0
+_rl_last_refill: float = time.monotonic()
+_RL_RATE = 2.0   # tokens per second
+_RL_MAX = 2.0
+
+
+def _rl_acquire() -> None:
+    """Block until a rate-limit token is available."""
+    with _rl_lock:
+        global _rl_tokens, _rl_last_refill
+        now = time.monotonic()
+        elapsed = now - _rl_last_refill
+        _rl_tokens = min(_RL_MAX, _rl_tokens + elapsed * _RL_RATE)
+        _rl_last_refill = now
+        if _rl_tokens >= 1.0:
+            _rl_tokens -= 1.0
+            return
+        wait = (1.0 - _rl_tokens) / _RL_RATE
+    time.sleep(wait)
+
+
+def _yf_get(client: _httpx.Client, url: str, params: dict | None = None) -> _httpx.Response:
+    """Rate-limited GET to Yahoo Finance with crumb + cookie injection."""
+    _rl_acquire()
+    crumb, cookies = _get_yf_crumb()
+    p = dict(params or {})
+    if crumb:
+        p["crumb"] = crumb
+    return client.get(url, params=p, headers=_YF_HEADERS, cookies=cookies)
 
 
 def lookup_ticker(ticker: str) -> dict:
     """Return ticker info with one of three states:
       valid=True   — confirmed exists, includes name/price/exchange
       valid=False  — confirmed does not exist (bad format or Yahoo returned empty)
-      valid=None   — could not reach any data source (network error)
+      valid=None   — could not reach any data source (network error / rate limited)
 
     Tries multiple sources in order:
-      1. Yahoo Finance v8 chart API (direct httpx, no crumb)
-      2. Yahoo Finance v7 quote API
-      3. yfinance library (fast_info, then history)
+      1. Yahoo Finance v8 chart API with crumb session (query2 then query1)
+      2. yfinance library (fast_info, then history)
     """
     t = ticker.strip().upper()
 
@@ -318,13 +448,15 @@ def lookup_ticker(ticker: str) -> dict:
         return {"valid": False, "name": None, "price": None, "exchange": None}
 
     network_error = False
+    rate_limited = False
 
-    # --- Strategy 1: Yahoo Finance v8 chart (query1) ---
-    for base in ("https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com"):
+    # --- Strategy 1: Yahoo Finance v8 chart with crumb ---
+    for base in ("https://query2.finance.yahoo.com", "https://query1.finance.yahoo.com"):
         try:
             url = f"{base}/v8/finance/chart/{t}"
-            with _httpx.Client(timeout=6.0, follow_redirects=True) as client:
-                resp = client.get(url, params={"interval": "1d", "range": "5d"}, headers=_YF_HEADERS)
+            with _httpx.Client(timeout=8.0, follow_redirects=True) as client:
+                resp = _yf_get(client, url, {"interval": "1d", "range": "5d"})
+
             if resp.status_code == 200:
                 data = resp.json()
                 result = (data.get("chart") or {}).get("result") or []
@@ -335,17 +467,34 @@ def lookup_ticker(ticker: str) -> dict:
                     exchange = meta.get("exchangeName") or meta.get("fullExchangeName")
                     if price:
                         return {"valid": True, "name": name, "price": float(price), "exchange": exchange}
-                # Got 200 but empty result — ticker doesn't exist
+                # 200 but empty result → ticker doesn't exist on this exchange
                 return {"valid": False, "name": None, "price": None, "exchange": None}
             elif resp.status_code == 404:
                 return {"valid": False, "name": None, "price": None, "exchange": None}
+            elif resp.status_code == 429:
+                logger.warning(f"lookup_ticker: 429 rate-limited by Yahoo Finance ({base}) for {t}")
+                rate_limited = True
+                # Invalidate crumb so next call fetches a fresh one
+                with _crumb_lock:
+                    _crumb_state["expires"] = 0.0
+                # Don't bother trying the other Yahoo base — same IP, same limit
+                break
+            else:
+                logger.debug(f"lookup_ticker {base} returned {resp.status_code} for {t}")
+                network_error = True
         except Exception as e:
             logger.debug(f"lookup_ticker {base} failed for {t}: {e}")
             network_error = True
 
+    # If we're hard rate-limited by Yahoo, skip yfinance (it uses the same endpoint)
+    if rate_limited:
+        logger.warning(f"lookup_ticker: Yahoo Finance rate-limited for {t}, returning unknown state")
+        return {"valid": None, "name": None, "price": None, "exchange": None}
+
     # --- Strategy 2: yfinance fast_info ---
     try:
-        tk = yf.Ticker(t)
+        sess = _get_yf_session()
+        tk = yf.Ticker(t, session=sess)
         price = tk.fast_info.last_price
         if price and price > 0:
             full = tk.info
@@ -359,7 +508,8 @@ def lookup_ticker(ticker: str) -> dict:
 
     # --- Strategy 3: yfinance history ---
     try:
-        tk = yf.Ticker(t)
+        sess = _get_yf_session()
+        tk = yf.Ticker(t, session=sess)
         hist = tk.history(period="5d")
         if not hist.empty:
             price = float(hist["Close"].iloc[-1])
