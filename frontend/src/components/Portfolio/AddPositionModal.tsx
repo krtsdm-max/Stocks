@@ -23,6 +23,9 @@ export function AddPositionModal({ onClose, onAdded }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // true/unknown → allow submit; false → blocked; null → not yet validated
+  const tickerValid = tickerState === true || tickerState === 'unknown';
+
   const handleTickerBlur = async () => {
     if (!form.ticker) return;
     setValidating(true);
