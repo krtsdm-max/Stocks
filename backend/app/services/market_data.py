@@ -50,11 +50,14 @@ def _cache_set(key: str, data: dict, ttl: int) -> None:
 
 
 def invalidate_price_cache(tickers: list[str]) -> None:
-    """Delete cached price data for given tickers so the next fetch is fresh."""
+    """Delete cached price + history data for given tickers so the next fetch is fresh."""
     try:
         r = get_redis()
         for ticker in tickers:
-            r.delete(_cache_key("price", ticker.upper()))
+            t = ticker.upper()
+            r.delete(_cache_key("price", t))
+            r.delete(_cache_key("history_1y", t))
+            r.delete(_cache_key("fundamentals", t))
     except Exception as e:
         logger.warning(f"Cache invalidation error: {e}")
 
