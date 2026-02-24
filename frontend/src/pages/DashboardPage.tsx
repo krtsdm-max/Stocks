@@ -80,12 +80,22 @@ export function DashboardPage({ onNavigateToChat }: Props) {
 
   if (view === 'detail' && selectedPositionId && selectedPosition) {
     return (
-      <PositionDetailCard
-        positionId={selectedPositionId}
-        position={selectedPosition}
-        onBack={() => setView('dashboard')}
-        onEdit={() => setEditPosition(selectedPosition)}
-      />
+      <>
+        <PositionDetailCard
+          positionId={selectedPositionId}
+          position={selectedPosition}
+          onBack={() => setView('dashboard')}
+          onEdit={() => setEditPosition(selectedPosition)}
+        />
+        {editPosition && (
+          <EditPositionModal
+            position={editPosition}
+            onClose={() => setEditPosition(null)}
+            onUpdated={() => { load(); setEditPosition(null); }}
+            onDeleted={() => { load(); setEditPosition(null); setView('dashboard'); }}
+          />
+        )}
+      </>
     );
   }
 
