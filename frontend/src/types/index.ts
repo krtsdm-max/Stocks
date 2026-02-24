@@ -53,6 +53,22 @@ export interface PortfolioPosition {
   latest_consensus?: ConsensusDecision;
 }
 
+export interface AggregatedPosition {
+  ticker: string;
+  ids: number[];
+  quantity: number;
+  average_purchase_price: number;
+  current_price?: number;
+  day_change?: number;
+  day_change_pct?: number;
+  total_value: number;
+  total_pnl: number;
+  total_pnl_pct: number;
+  portfolio_weight: number;
+  latest_consensus?: ConsensusDecision;
+  sub_positions: PortfolioPosition[];
+}
+
 export interface Portfolio {
   nav: number;
   total_cost: number;

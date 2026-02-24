@@ -49,6 +49,16 @@ def _cache_set(key: str, data: dict, ttl: int) -> None:
         logger.warning(f"Redis set error: {e}")
 
 
+def invalidate_price_cache(tickers: list[str]) -> None:
+    """Delete cached price data for given tickers so the next fetch is fresh."""
+    try:
+        r = get_redis()
+        for ticker in tickers:
+            r.delete(_cache_key("price", ticker.upper()))
+    except Exception as e:
+        logger.warning(f"Cache invalidation error: {e}")
+
+
 _yf_session_lock = threading.Lock()
 _yf_session_state: dict = {"session": None, "expires": 0.0}
 

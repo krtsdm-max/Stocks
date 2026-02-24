@@ -46,6 +46,12 @@ export const updatePosition = (id: number, data: Partial<{
 export const deletePosition = (id: number): Promise<void> =>
   api.delete(`/positions/${id}`).then(r => r.data);
 
+export const sellPosition = (
+  ticker: string,
+  quantity: number,
+): Promise<{ sold: number; ticker: string; remaining: number }> =>
+  api.post(`/positions/${ticker}/sell`, { quantity }).then(r => r.data);
+
 export const validateTicker = (ticker: string): Promise<{
   ticker: string;
   valid: boolean | null;  // null = network unavailable
@@ -63,7 +69,7 @@ export const refreshRecommendations = (positionId: number): Promise<unknown> =>
   api.post(`/recommendations/refresh/${positionId}`).then(r => r.data);
 
 export const refreshAllRecommendations = (): Promise<unknown> =>
-  api.post('/recommendations/refresh-all').then(r => r.data);
+  api.post('/recommendations/refresh-all', null, { timeout: 120000 }).then(r => r.data);
 
 // ── Chat ───────────────────────────────────────────────────────────────────────
 export const sendChatMessage = (data: {

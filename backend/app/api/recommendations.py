@@ -122,5 +122,9 @@ def refresh_position_recommendations(
 
 @router.post("/refresh-all")
 def refresh_all_recommendations(db: Session = Depends(get_db)):
+    # Invalidate price cache for all tickers so recommendations use fresh prices
+    positions = db.query(Position).all()
+    tickers = list({p.ticker for p in positions})
+    md.invalidate_price_cache(tickers)
     result = run_all_recommendations(db)
     return {"status": "completed", **result}
