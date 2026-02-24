@@ -1,7 +1,6 @@
 import logging
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
+from typing import Optional, Generator
 
 import anthropic
 from sqlalchemy.orm import Session
@@ -115,6 +114,47 @@ def _get_conversation_history(db: Session, session_id: str) -> list[dict]:
     return history
 
 
+def _call_expert(
+    client: anthropic.Anthropic,
+    expert_type: str,
+    persona: dict,
+    portfolio_context: str,
+    conversation_history: list,
+    user_message: str,
+) -> dict:
+    system_prompt = _build_expert_system_prompt(expert_type, portfolio_context, user_message)
+    msgs = conversation_history + [{"role": "user", "content": user_message}]
+    try:
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=1500,
+            system=system_prompt,
+            messages=msgs,
+        )
+        expert_text = response.content[0].text
+    except Exception as e:
+        logger.error(f"Anthropic API error for expert {expert_type}: {e}")
+        expert_text = "I'm unable to provide analysis at the moment. Please try again shortly."
+    return {
+        "expert_type": expert_type,
+        "expert_name": persona["name"],
+        "expert_title": persona["title"],
+        "response": expert_text,
+    }
+
+
+def ask_experts_stream(
+    user_message: str,
+    portfolio_context: str,
+    conversation_history: list,
+) -> Generator[dict, None, None]:
+    """Yields expert responses one by one in order: value → momentum → risk."""
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    for expert_type, persona in EXPERT_PERSONAS.items():
+        result = _call_expert(client, expert_type, persona, portfolio_context, conversation_history, user_message)
+        yield result
+
+
 def ask_experts(
     db: Session,
     user_message: str,
@@ -127,41 +167,7 @@ def ask_experts(
     portfolio_context = _build_position_context(db, ticker=position_ticker)
     conversation_history = _get_conversation_history(db, session_id)
 
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-    def _call_expert(expert_type: str, persona: dict) -> dict:
-        system_prompt = _build_expert_system_prompt(expert_type, portfolio_context, user_message)
-        msgs = conversation_history + [{"role": "user", "content": user_message}]
-        try:
-            response = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=600,
-                system=system_prompt,
-                messages=msgs,
-            )
-            expert_text = response.content[0].text
-        except Exception as e:
-            logger.error(f"Anthropic API error for expert {expert_type}: {e}")
-            expert_text = "I'm unable to provide analysis at the moment. Please try again shortly."
-        return {
-            "expert_type": expert_type,
-            "expert_name": persona["name"],
-            "expert_title": persona["title"],
-            "response": expert_text,
-        }
-
-    expert_responses_map: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {
-            executor.submit(_call_expert, et, persona): et
-            for et, persona in EXPERT_PERSONAS.items()
-        }
-        for future in as_completed(futures):
-            result = future.result()
-            expert_responses_map[result["expert_type"]] = result
-
-    # Preserve original ordering: value → momentum → risk
-    expert_responses = [expert_responses_map[et] for et in EXPERT_PERSONAS if et in expert_responses_map]
+    expert_responses = list(ask_experts_stream(user_message, portfolio_context, conversation_history))
 
     chat_msg = ChatMessage(
         user_message=user_message,

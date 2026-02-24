@@ -1,7 +1,7 @@
 import axios from 'axios';
 import type {
   Portfolio, Position, PositionDetail, ChartData,
-  ChatMessage, UserSettings, TrackRecord,
+  ChatMessage, ExpertChatResponse, UserSettings, TrackRecord,
 } from '../types';
 
 const api = axios.create({
@@ -75,6 +75,46 @@ export const sendChatMessage = (data: {
 
 export const getChatHistory = (sessionId?: string, limit = 20): Promise<ChatMessage[]> =>
   chatApi.get('/chat/history', { params: { session_id: sessionId, limit } }).then(r => r.data);
+
+type StreamEvent =
+  | { type: 'expert'; expert: ExpertChatResponse }
+  | { type: 'done'; message_id: number; session_id: string; created_at: string };
+
+export async function* streamChatMessage(data: {
+  message: string;
+  session_id?: string;
+  position_ticker?: string;
+}): AsyncGenerator<StreamEvent> {
+  const response = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6).trim();
+        if (jsonStr) yield JSON.parse(jsonStr) as StreamEvent;
+      }
+    }
+  }
+}
 
 // ── Experts ────────────────────────────────────────────────────────────────────
 export const getExpertTrackRecord = (expertType: string): Promise<TrackRecord> =>

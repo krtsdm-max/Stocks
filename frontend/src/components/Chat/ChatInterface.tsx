@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Send, MessageSquare } from 'lucide-react';
-import { sendChatMessage, getChatHistory } from '../../services/api';
-import type { ChatMessage, ExpertType } from '../../types';
+import { streamChatMessage, getChatHistory } from '../../services/api';
+import type { ChatMessage, ExpertChatResponse, ExpertType } from '../../types';
 import { LoadingSpinner, InlineSpinner } from '../Common/LoadingSpinner';
 import { Card } from '../Common/Card';
 
@@ -17,6 +17,14 @@ const EXPERT_AVATAR_BG: Record<ExpertType, string> = {
   risk: 'bg-orange-200 text-orange-800',
 };
 
+const EXPERT_ORDER: ExpertType[] = ['value', 'momentum', 'risk'];
+
+interface StreamingMsg {
+  user_message: string;
+  expert_responses: ExpertChatResponse[];
+  remaining: ExpertType[];
+}
+
 interface Props {
   defaultTicker?: string;
 }
@@ -29,6 +37,7 @@ export function ChatInterface({ defaultTicker }: Props) {
   const [loading, setLoading] = useState(true);
   const [ticker, setTicker] = useState(defaultTicker ?? '');
   const [error, setError] = useState<string | null>(null);
+  const [streamingMsg, setStreamingMsg] = useState<StreamingMsg | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,7 +46,7 @@ export function ChatInterface({ defaultTicker }: Props) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, streamingMsg]);
 
   const loadHistory = async () => {
     setLoading(true);
@@ -59,20 +68,40 @@ export function ChatInterface({ defaultTicker }: Props) {
     setSending(true);
     setError(null);
 
+    setStreamingMsg({ user_message: msg, expert_responses: [], remaining: [...EXPERT_ORDER] });
+
     try {
-      const response = await sendChatMessage({
+      for await (const event of streamChatMessage({
         message: msg,
         session_id: sessionId,
         position_ticker: ticker || undefined,
-      });
-      setMessages(prev => [...prev, response]);
-      if (!sessionId) setSessionId(response.session_id);
-    } catch (err: unknown) {
-      const isTimeout = err instanceof Error && err.message.toLowerCase().includes('timeout');
-      setError(isTimeout
-        ? 'Request timed out — the experts are taking too long. Please try again.'
-        : 'Failed to get a response. Please check your connection and try again.'
-      );
+      })) {
+        if (event.type === 'expert') {
+          setStreamingMsg(prev => prev ? {
+            ...prev,
+            expert_responses: [...prev.expert_responses, event.expert],
+            remaining: prev.remaining.filter(t => t !== event.expert.expert_type),
+          } : null);
+        } else if (event.type === 'done') {
+          const sid = event.session_id;
+          setStreamingMsg(prev => {
+            if (!prev) return null;
+            const fullMsg: ChatMessage = {
+              id: event.message_id,
+              user_message: prev.user_message,
+              expert_responses: prev.expert_responses,
+              session_id: sid,
+              created_at: event.created_at,
+            };
+            setMessages(m => [...m, fullMsg]);
+            return null;
+          });
+          if (!sessionId) setSessionId(sid);
+        }
+      }
+    } catch {
+      setStreamingMsg(null);
+      setError('Failed to get a response. Please check your connection and try again.');
       setInput(msg);
     } finally {
       setSending(false);
@@ -84,6 +113,34 @@ export function ChatInterface({ defaultTicker }: Props) {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const renderExpertCard = (response: ExpertChatResponse) => {
+    const style = EXPERT_STYLES[response.expert_type as ExpertType] ?? EXPERT_STYLES.value;
+    const avatarBg = EXPERT_AVATAR_BG[response.expert_type as ExpertType] ?? 'bg-gray-200';
+    return (
+      <div key={response.expert_type} className={`flex gap-3 ${style.bg} rounded-2xl rounded-tl-sm p-4 border ${style.border} max-w-3xl shadow-sm`}>
+        <div className={`flex-none w-8 h-8 rounded-full ${avatarBg} flex items-center justify-center text-xs font-bold`}>
+          {style.avatar}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className={`text-xs font-semibold mb-1.5 ${style.nameColor}`}>
+            {response.expert_name}
+          </p>
+          <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{response.response}</p>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSpinner = (type: ExpertType) => {
+    const style = EXPERT_STYLES[type];
+    return (
+      <div key={type} className={`flex gap-3 ${style.bg} rounded-2xl p-4 border ${style.border} max-w-xs`}>
+        <InlineSpinner />
+        <span className={`text-xs ${style.nameColor}`}>Analyzing...</span>
+      </div>
+    );
   };
 
   if (loading) return <LoadingSpinner />;
@@ -113,7 +170,7 @@ export function ChatInterface({ defaultTicker }: Props) {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto bg-gray-50 border-x border-gray-200 p-4 space-y-6">
-        {messages.length === 0 && (
+        {messages.length === 0 && !streamingMsg && (
           <div className="text-center py-12">
             <p className="text-gray-400 text-sm">No messages yet.</p>
             <p className="text-gray-400 text-xs mt-1">
@@ -133,23 +190,7 @@ export function ChatInterface({ defaultTicker }: Props) {
 
             {/* Expert responses */}
             <div className="space-y-2">
-              {msg.expert_responses.map(response => {
-                const style = EXPERT_STYLES[response.expert_type as ExpertType] ?? EXPERT_STYLES.value;
-                const avatarBg = EXPERT_AVATAR_BG[response.expert_type as ExpertType] ?? 'bg-gray-200';
-                return (
-                  <div key={response.expert_type} className={`flex gap-3 ${style.bg} rounded-2xl rounded-tl-sm p-4 border ${style.border} max-w-3xl shadow-sm`}>
-                    <div className={`flex-none w-8 h-8 rounded-full ${avatarBg} flex items-center justify-center text-xs font-bold`}>
-                      {style.avatar}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-xs font-semibold mb-1.5 ${style.nameColor}`}>
-                        {response.expert_name}
-                      </p>
-                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{response.response}</p>
-                    </div>
-                  </div>
-                );
-              })}
+              {msg.expert_responses.map(renderExpertCard)}
             </div>
 
             <p className="text-xs text-gray-400 text-right">
@@ -158,17 +199,18 @@ export function ChatInterface({ defaultTicker }: Props) {
           </div>
         ))}
 
-        {sending && (
-          <div className="space-y-2">
-            {['value', 'momentum', 'risk'].map(type => {
-              const style = EXPERT_STYLES[type as ExpertType];
-              return (
-                <div key={type} className={`flex gap-3 ${style.bg} rounded-2xl p-4 border ${style.border} max-w-xs`}>
-                  <InlineSpinner />
-                  <span className={`text-xs ${style.nameColor}`}>Analyzing...</span>
-                </div>
-              );
-            })}
+        {/* Streaming in-progress message */}
+        {streamingMsg && (
+          <div className="space-y-3">
+            <div className="flex justify-end">
+              <div className="bg-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-xl text-sm shadow-sm">
+                {streamingMsg.user_message}
+              </div>
+            </div>
+            <div className="space-y-2">
+              {streamingMsg.expert_responses.map(renderExpertCard)}
+              {streamingMsg.remaining.map(renderSpinner)}
+            </div>
           </div>
         )}
 
