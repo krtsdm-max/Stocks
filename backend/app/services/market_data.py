@@ -301,7 +301,7 @@ def calculate_portfolio_metrics(positions: list[dict]) -> dict:
         ticker = p["ticker"]
         if ticker in current_prices:
             val = current_prices[ticker] * float(p["quantity"])
-            position_values[ticker] = val
+            position_values[ticker] = position_values.get(ticker, 0.0) + val
             total_value += val
 
     weights = {t: (v / total_value if total_value > 0 else 0) for t, v in position_values.items()}
