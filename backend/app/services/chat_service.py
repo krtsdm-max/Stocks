@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.chat import ChatMessage
+from app.models.consensus import ConsensusDecision
 from app.models.recommendation import ExpertRecommendation
 from app.models.position import Position
 
@@ -52,22 +53,36 @@ def _build_position_context(db: Session, ticker: Optional[str] = None) -> str:
     if not positions:
         return "The portfolio is currently empty."
 
-    lines = ["Current portfolio positions:"]
+    lines = ["Current portfolio positions and latest expert recommendations:"]
     for pos in positions:
-        line = f"- {pos.ticker}: {float(pos.quantity):.0f} shares @ ${float(pos.average_purchase_price):.2f} avg"
-        if ticker and pos.ticker == ticker:
-            # Add latest recommendations for this ticker
-            recs = (
-                db.query(ExpertRecommendation)
-                .filter(ExpertRecommendation.position_id == pos.id)
-                .order_by(ExpertRecommendation.created_at.desc())
-                .limit(3)
-                .all()
-            )
-            if recs:
-                line += f"\n  Latest recommendations:"
-                for rec in recs:
-                    line += f"\n    [{rec.expert_type.upper()}] {rec.recommendation_action.upper()} — {rec.reasoning[:150]}..."
+        line = f"- {pos.ticker}: {float(pos.quantity):.4g} shares @ ${float(pos.average_purchase_price):.2f} avg"
+
+        # Always include latest consensus + individual expert votes for every position
+        consensus = (
+            db.query(ConsensusDecision)
+            .filter(ConsensusDecision.position_id == pos.id)
+            .order_by(ConsensusDecision.timestamp.desc())
+            .first()
+        )
+        if consensus:
+            votes = consensus.expert_votes or {}
+            expert_parts = []
+            for etype, vote in votes.items():
+                action = vote.get("action", "?").upper()
+                conf = vote.get("confidence_level", "?")
+                expert_parts.append(f"{etype.upper()}={action}({conf}%)")
+            votes_str = ", ".join(expert_parts) if expert_parts else "no votes"
+            line += f"\n  Consensus: {consensus.aggregated_action.upper()} [{consensus.consensus_level}] | {votes_str}"
+
+            # For the focused ticker, also include full reasoning snippets
+            if ticker and pos.ticker == ticker:
+                for etype, vote in votes.items():
+                    reasoning = vote.get("reasoning", "")
+                    if reasoning:
+                        line += f"\n    {etype.upper()} reasoning: {reasoning[:200]}..."
+        else:
+            line += "\n  Consensus: no recommendations yet"
+
         lines.append(line)
     return "\n".join(lines)
 
@@ -81,12 +96,14 @@ def _build_expert_system_prompt(expert_type: str, portfolio_context: str, user_m
         f"Portfolio context:\n{portfolio_context}\n\n"
         "Rules:\n"
         "1. Always stay in character as this specific expert.\n"
-        "2. Give CONCRETE, actionable recommendations — not vague commentary.\n"
-        "3. Cite specific numbers (prices, percentages, ratios) when you have them.\n"
-        "4. Keep your response to 2–4 paragraphs.\n"
-        "5. Do not contradict your previous recommendations unless you explicitly explain why the situation changed.\n"
-        "6. Do not pretend to have real-time data you don't have — acknowledge if data is unavailable.\n"
-        "7. Always end with a clear action statement.\n"
+        "2. The portfolio context above contains COMPUTED recommendations (Consensus + expert votes) based on real market data. "
+        "Your answers MUST be consistent with those stored recommendations. If the stored vote for your expert type is SELL, do not say HOLD or BUY.\n"
+        "3. Give CONCRETE, actionable recommendations — not vague commentary.\n"
+        "4. Cite specific numbers (prices, percentages, ratios) when you have them.\n"
+        "5. Keep your response to 2–4 paragraphs.\n"
+        "6. Do not contradict the stored recommendations unless you explicitly explain why the situation changed.\n"
+        "7. Do not pretend to have real-time data you don't have — acknowledge if data is unavailable.\n"
+        "8. Always end with a clear action statement that matches the stored recommendation for your expert type.\n"
     )
 
 
