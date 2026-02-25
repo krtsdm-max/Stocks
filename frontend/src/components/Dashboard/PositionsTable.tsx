@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight, RefreshCw, BarChart2, TrendingDown } from 'lucide-react';
 import type { PortfolioPosition, AggregatedPosition, ConsensusDecision } from '../../types';
 import { ActionBadge, ConsensusBadge } from '../Common/Badge';
@@ -117,9 +117,8 @@ export function PositionsTable({ positions, onSelectPosition, onRefreshPosition,
             const primaryId = agg.sub_positions.sort((a, b) => b.quantity - a.quantity)[0].id;
 
             return (
-              <>
+              <Fragment key={agg.ticker}>
                 <tr
-                  key={agg.ticker}
                   className="hover:bg-gray-50 cursor-pointer transition-colors"
                   onClick={() => setExpandedTicker(isExpanded ? null : agg.ticker)}
                 >
@@ -203,7 +202,7 @@ export function PositionsTable({ positions, onSelectPosition, onRefreshPosition,
                 </tr>
 
                 {isExpanded && (
-                  <tr key={`expanded-${agg.ticker}`} className="bg-blue-50/50">
+                  <tr className="bg-blue-50/50">
                     <td colSpan={9} className="px-8 py-4">
                       {isMulti && (
                         <div className="mb-4">
@@ -273,7 +272,7 @@ export function PositionsTable({ positions, onSelectPosition, onRefreshPosition,
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             );
           })}
         </tbody>

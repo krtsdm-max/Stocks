@@ -27,7 +27,7 @@ export function PortfolioHeader({ portfolio, riskProfile, onCashUpdate }: Props)
   const [savingCash, setSavingCash] = useState(false);
 
   const dayPositive = portfolio.day_pnl >= 0;
-  const updatedAt = new Date(portfolio.last_updated).toLocaleTimeString('en-US', {
+  const updatedAt = new Date(portfolio.last_updated).toLocaleTimeString(undefined, {
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
 
@@ -149,7 +149,7 @@ export function PortfolioHeader({ portfolio, riskProfile, onCashUpdate }: Props)
       <div className="flex items-center justify-between mt-4 pt-4 border-t border-blue-700">
         <span className="text-blue-300 text-xs flex items-center gap-1">
           <Clock size={12} />
-          Updated: {updatedAt} UTC
+          Updated: {updatedAt}
         </span>
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${portfolio.market_open ? 'bg-green-500/20 text-green-300' : 'bg-gray-500/20 text-gray-300'}`}>
           {portfolio.market_open ? '● Market Open' : '● Market Closed'}

@@ -101,7 +101,7 @@ def get_portfolio(db: Session = Depends(get_db)):
         "day_pnl_pct": round(total_day_pnl_pct, 2),
         "positions_count": len(positions),
         "market_open": _is_market_open(),
-        "last_updated": datetime.utcnow().isoformat(),
+        "last_updated": datetime.utcnow().isoformat() + "Z",
         "positions": positions_data,
     }
 
