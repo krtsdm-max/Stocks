@@ -48,40 +48,93 @@ EXPERT_PERSONAS = {
 
 
 def _build_position_context(db: Session, ticker: Optional[str] = None) -> str:
-    """Builds a context string about current portfolio positions for LLM."""
+    """Builds portfolio context with raw market data snapshots for LLM reasoning."""
     positions = db.query(Position).all()
     if not positions:
         return "The portfolio is currently empty."
 
-    lines = ["Current portfolio positions and latest expert recommendations:"]
+    lines = ["Current portfolio positions with real market data:"]
     for pos in positions:
-        line = f"- {pos.ticker}: {float(pos.quantity):.4g} shares @ ${float(pos.average_purchase_price):.2f} avg"
+        is_focused = ticker and pos.ticker == ticker
+        line = f"\n{'>>>' if is_focused else '-'} {pos.ticker}: {float(pos.quantity):.4g} shares @ ${float(pos.average_purchase_price):.2f} avg cost"
 
-        # Always include latest consensus + individual expert votes for every position
-        consensus = (
-            db.query(ConsensusDecision)
-            .filter(ConsensusDecision.position_id == pos.id)
-            .order_by(ConsensusDecision.timestamp.desc())
-            .first()
+        # Gather latest market snapshot per expert type
+        recs = (
+            db.query(ExpertRecommendation)
+            .filter(ExpertRecommendation.position_id == pos.id)
+            .order_by(ExpertRecommendation.created_at.desc())
+            .limit(9)  # up to 3 runs × 3 experts
+            .all()
         )
-        if consensus:
-            votes = consensus.expert_votes or {}
-            expert_parts = []
-            for etype, vote in votes.items():
-                action = vote.get("action", "?").upper()
-                conf = vote.get("confidence_level", "?")
-                expert_parts.append(f"{etype.upper()}={action}({conf}%)")
-            votes_str = ", ".join(expert_parts) if expert_parts else "no votes"
-            line += f"\n  Consensus: {consensus.aggregated_action.upper()} [{consensus.consensus_level}] | {votes_str}"
+        if recs:
+            # Collect most recent snapshot per expert type
+            snapshots: dict[str, dict] = {}
+            for r in recs:
+                if r.expert_type not in snapshots and r.market_snapshot:
+                    snapshots[r.expert_type] = r.market_snapshot
 
-            # For the focused ticker, also include full reasoning snippets
-            if ticker and pos.ticker == ticker:
+            # Merge key market data fields from all snapshots
+            merged: dict = {}
+            for snap in snapshots.values():
+                for k, v in snap.items():
+                    if v is not None and k not in merged:
+                        merged[k] = v
+
+            # Format key metrics compactly
+            metrics = []
+            if "price" in merged:
+                metrics.append(f"price=${merged['price']:.2f}")
+            if "pe_ratio" in merged and merged["pe_ratio"]:
+                metrics.append(f"P/E={merged['pe_ratio']:.1f}")
+            if "pb_ratio" in merged and merged["pb_ratio"]:
+                metrics.append(f"P/B={merged['pb_ratio']:.2f}")
+            if "rsi" in merged:
+                metrics.append(f"RSI={merged['rsi']:.1f}")
+            if "ma50" in merged:
+                metrics.append(f"MA50={merged['ma50']:.2f}")
+            if "ma200" in merged:
+                metrics.append(f"MA200={merged['ma200']:.2f}")
+            if "macd_histogram" in merged:
+                metrics.append(f"MACD_hist={merged['macd_histogram']:.3f}")
+            if "momentum_3m_pct" in merged and merged["momentum_3m_pct"] is not None:
+                metrics.append(f"mom3m={merged['momentum_3m_pct']:.1f}%")
+            if "position_weight_pct" in merged:
+                metrics.append(f"portfolio_weight={merged['position_weight_pct']:.1f}%")
+            if "position_volatility_pct" in merged:
+                metrics.append(f"volatility={merged['position_volatility_pct']:.1f}%")
+            if "position_drawdown_pct" in merged:
+                metrics.append(f"drawdown={merged['position_drawdown_pct']:.1f}%")
+            if "sector" in merged:
+                metrics.append(f"sector={merged['sector']}")
+            if "beta" in merged and merged["beta"]:
+                metrics.append(f"beta={merged['beta']:.2f}")
+            if metrics:
+                line += f"\n  Market data: {', '.join(metrics)}"
+
+            # Quantitative model output as reference (not as constraint)
+            consensus = (
+                db.query(ConsensusDecision)
+                .filter(ConsensusDecision.position_id == pos.id)
+                .order_by(ConsensusDecision.timestamp.desc())
+                .first()
+            )
+            if consensus:
+                votes = consensus.expert_votes or {}
+                vote_parts = []
                 for etype, vote in votes.items():
+                    act = vote.get("action", "?").upper()
+                    conf = vote.get("confidence_level", "?")
+                    vote_parts.append(f"{etype}={act}({conf}%)")
+                line += f"\n  Quant model: {consensus.aggregated_action.upper()} [{consensus.consensus_level}] | {', '.join(vote_parts)}"
+
+            # For focused ticker: include full reasoning from quant model
+            if is_focused and consensus:
+                for etype, vote in (consensus.expert_votes or {}).items():
                     reasoning = vote.get("reasoning", "")
                     if reasoning:
-                        line += f"\n    {etype.upper()} reasoning: {reasoning[:200]}..."
+                        line += f"\n  {etype.upper()} quant reasoning: {reasoning}"
         else:
-            line += "\n  Consensus: no recommendations yet"
+            line += "\n  Market data: not yet computed (run Refresh to generate)"
 
         lines.append(line)
     return "\n".join(lines)
@@ -96,14 +149,15 @@ def _build_expert_system_prompt(expert_type: str, portfolio_context: str, user_m
         f"Portfolio context:\n{portfolio_context}\n\n"
         "Rules:\n"
         "1. Always stay in character as this specific expert.\n"
-        "2. The portfolio context above contains COMPUTED recommendations (Consensus + expert votes) based on real market data. "
-        "Your answers MUST be consistent with those stored recommendations. If the stored vote for your expert type is SELL, do not say HOLD or BUY.\n"
+        "2. The portfolio context includes real market data (price, RSI, P/E, MACD, volatility, etc.) "
+        "and a 'Quant model' reference showing what a rule-based algorithm concluded. "
+        "Use the market data to form YOUR OWN independent analysis. "
+        "If you agree with the quant model, say so. If you disagree, explain why — that disagreement is valuable.\n"
         "3. Give CONCRETE, actionable recommendations — not vague commentary.\n"
-        "4. Cite specific numbers (prices, percentages, ratios) when you have them.\n"
+        "4. Cite specific numbers from the market data provided (RSI, P/E, price vs MA, etc.).\n"
         "5. Keep your response to 2–4 paragraphs.\n"
-        "6. Do not contradict the stored recommendations unless you explicitly explain why the situation changed.\n"
-        "7. Do not pretend to have real-time data you don't have — acknowledge if data is unavailable.\n"
-        "8. Always end with a clear action statement that matches the stored recommendation for your expert type.\n"
+        "6. Do not pretend to have real-time data beyond what is in the context — acknowledge if data is missing.\n"
+        "7. Always end with a clear action statement.\n"
     )
 
 
