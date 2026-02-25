@@ -296,13 +296,15 @@ def calculate_portfolio_metrics(positions: list[dict]) -> dict:
             series = prices_df[ticker]
             peak = series.cummax()
             dd = (series - peak) / peak * 100
-            drawdowns[ticker] = float(dd.iloc[-1])
+            val = dd.iloc[-1]
+            drawdowns[ticker] = float(val) if np.isfinite(val) else 0.0
 
     # Annualised volatility per position
     volatilities = {}
     for ticker in tickers:
         if ticker in returns_df.columns:
-            volatilities[ticker] = float(returns_df[ticker].std() * np.sqrt(252) * 100)
+            val = returns_df[ticker].std() * np.sqrt(252) * 100
+            volatilities[ticker] = float(val) if np.isfinite(val) else 0.0
 
     return {
         "total_value": total_value,

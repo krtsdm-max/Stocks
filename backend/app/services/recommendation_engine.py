@@ -142,7 +142,12 @@ def run_recommendations_for_position(
         }
         actions.append(result.action)
 
-    db.flush()
+    try:
+        db.flush()
+    except Exception as e:
+        logger.error(f"db.flush() failed for {position.ticker}: {e}", exc_info=True)
+        db.rollback()
+        raise
 
     # Aggregate
     if not actions:
@@ -157,8 +162,13 @@ def run_recommendations_for_position(
         expert_votes=expert_votes,
     )
     db.add(consensus)
-    db.commit()
-    db.refresh(consensus)
+    try:
+        db.commit()
+        db.refresh(consensus)
+    except Exception as e:
+        logger.error(f"db.commit() failed for {position.ticker}: {e}", exc_info=True)
+        db.rollback()
+        raise
     return consensus
 
 
@@ -193,8 +203,12 @@ def run_all_recommendations(db: Session) -> dict:
                 pass
 
     updated = 0
-    for position in positions:
+    position_ids = [p.id for p in positions]
+    for position_id in position_ids:
         try:
+            position = db.query(Position).filter(Position.id == position_id).first()
+            if not position:
+                continue
             run_recommendations_for_position(
                 db=db,
                 position=position,
@@ -203,7 +217,7 @@ def run_all_recommendations(db: Session) -> dict:
             )
             updated += 1
         except Exception as e:
-            logger.error(f"Failed to run recommendations for {position.ticker}: {e}", exc_info=True)
+            logger.error(f"Failed to run recommendations for position {position_id}: {e}", exc_info=True)
             try:
                 db.rollback()
             except Exception:
