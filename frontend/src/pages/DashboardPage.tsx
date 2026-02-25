@@ -32,6 +32,7 @@ export function DashboardPage({ onNavigateToChat }: Props) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editPosition, setEditPosition] = useState<PortfolioPosition | null>(null);
   const [sellTarget, setSellTarget] = useState<SellTarget | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -51,8 +52,13 @@ export function DashboardPage({ onNavigateToChat }: Props) {
 
   const handleRefreshAll = async () => {
     setRefreshing(true);
+    setRefreshError(null);
     try {
       await refreshAllRecommendations();
+      await load();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Refresh failed';
+      setRefreshError(msg);
       await load();
     } finally {
       setRefreshing(false);
@@ -103,6 +109,12 @@ export function DashboardPage({ onNavigateToChat }: Props) {
     <div>
       <PortfolioHeader portfolio={portfolio} riskProfile={settings.risk_profile} />
 
+      {refreshError && (
+        <div className="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center justify-between">
+          <span>Refresh error: {refreshError}</span>
+          <button className="ml-3 text-red-400 hover:text-red-600" onClick={() => setRefreshError(null)}>✕</button>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-gray-900">
           Positions <span className="text-gray-400 font-normal text-sm">({portfolio.positions.length})</span>

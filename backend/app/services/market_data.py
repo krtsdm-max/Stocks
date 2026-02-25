@@ -261,11 +261,13 @@ def calculate_portfolio_metrics(positions: list[dict]) -> dict:
 
     # Align all series on common dates
     prices_df = pd.DataFrame(price_data).dropna()
+    if prices_df.empty:
+        return {}
 
     # Current portfolio value
     current_prices = {}
     for ticker in tickers:
-        if ticker in prices_df.columns:
+        if ticker in prices_df.columns and len(prices_df[ticker]) > 0:
             current_prices[ticker] = float(prices_df[ticker].iloc[-1])
 
     position_values = {}

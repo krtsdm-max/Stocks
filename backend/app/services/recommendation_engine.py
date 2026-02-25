@@ -173,7 +173,11 @@ def run_all_recommendations(db: Session) -> dict:
         {"ticker": p.ticker, "quantity": float(p.quantity), "average_purchase_price": float(p.average_purchase_price)}
         for p in positions
     ]
-    portfolio_metrics = md.calculate_portfolio_metrics(portfolio_data)
+    try:
+        portfolio_metrics = md.calculate_portfolio_metrics(portfolio_data)
+    except Exception as e:
+        logger.error(f"calculate_portfolio_metrics failed: {e}")
+        portfolio_metrics = {}
 
     # Compute sector weights
     sector_map: dict[str, float] = {}
@@ -181,9 +185,12 @@ def run_all_recommendations(db: Session) -> dict:
     if total_val > 0:
         weights = portfolio_metrics.get("weights", {})
         for pos in positions:
-            fund = md.get_fundamentals(pos.ticker)
-            sec = fund.get("sector", "Unknown") if fund else "Unknown"
-            sector_map[sec] = sector_map.get(sec, 0) + weights.get(pos.ticker, 0)
+            try:
+                fund = md.get_fundamentals(pos.ticker)
+                sec = fund.get("sector", "Unknown") if fund else "Unknown"
+                sector_map[sec] = sector_map.get(sec, 0) + weights.get(pos.ticker, 0)
+            except Exception:
+                pass
 
     updated = 0
     for position in positions:
@@ -196,7 +203,11 @@ def run_all_recommendations(db: Session) -> dict:
             )
             updated += 1
         except Exception as e:
-            logger.error(f"Failed to run recommendations for {position.ticker}: {e}")
+            logger.error(f"Failed to run recommendations for {position.ticker}: {e}", exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     return {"updated": updated, "total": len(positions)}
 
