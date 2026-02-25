@@ -6,8 +6,8 @@ import pytz
 
 from app.database import get_db
 from app.models.position import Position
-from app.models.recommendation import ExpertRecommendation
 from app.models.consensus import ConsensusDecision
+from app.models.cash import CashBalance
 from app.services import market_data as md
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
@@ -28,7 +28,11 @@ def _is_market_open() -> bool:
 def get_portfolio(db: Session = Depends(get_db)):
     positions = db.query(Position).order_by(Position.ticker).all()
 
-    total_value = 0.0
+    # Fetch cash balance
+    cash_row = db.query(CashBalance).first()
+    cash = float(cash_row.amount) if cash_row else 0.0
+
+    invested_value = 0.0
     total_cost = 0.0
     total_day_pnl = 0.0
     positions_data = []
@@ -42,7 +46,7 @@ def get_portfolio(db: Session = Depends(get_db)):
 
         pos_value = (current * qty) if current else (avg * qty)
         cost_basis = avg * qty
-        total_value += pos_value
+        invested_value += pos_value
         total_cost += cost_basis
         if current and prev_close:
             total_day_pnl += (current - prev_close) * qty
@@ -77,16 +81,19 @@ def get_portfolio(db: Session = Depends(get_db)):
             } if latest_consensus else None,
         })
 
-    # Calculate weights
+    # NAV = stocks + cash; weights denominated against full NAV
+    nav = invested_value + cash
     for p in positions_data:
-        p["portfolio_weight"] = (p["total_value"] / total_value * 100) if total_value > 0 else 0
+        p["portfolio_weight"] = (p["total_value"] / nav * 100) if nav > 0 else 0
 
-    total_pnl = total_value - total_cost
+    total_pnl = invested_value - total_cost
     total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
-    total_day_pnl_pct = (total_day_pnl / (total_value - total_day_pnl) * 100) if (total_value - total_day_pnl) > 0 else 0
+    total_day_pnl_pct = (total_day_pnl / (invested_value - total_day_pnl) * 100) if (invested_value - total_day_pnl) > 0 else 0
 
     return {
-        "nav": round(total_value, 2),
+        "nav": round(nav, 2),
+        "invested_value": round(invested_value, 2),
+        "cash": round(cash, 2),
         "total_cost": round(total_cost, 2),
         "total_pnl": round(total_pnl, 2),
         "total_pnl_pct": round(total_pnl_pct, 2),

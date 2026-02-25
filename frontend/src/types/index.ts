@@ -71,6 +71,8 @@ export interface AggregatedPosition {
 
 export interface Portfolio {
   nav: number;
+  invested_value: number;
+  cash: number;
   total_cost: number;
   total_pnl: number;
   total_pnl_pct: number;

@@ -132,3 +132,7 @@ export const getSettings = (): Promise<UserSettings> =>
 
 export const updateSettings = (data: { risk_profile: string }): Promise<UserSettings> =>
   api.post('/settings', data).then(r => r.data);
+
+// ── Cash ───────────────────────────────────────────────────────────────────────
+export const updateCash = (amount: number): Promise<{ amount: number }> =>
+  api.patch('/cash', { amount }).then(r => r.data);

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import Base, engine
-from app.api import positions, portfolio, recommendations, chat, experts, settings as settings_api
+from app.api import positions, portfolio, recommendations, chat, experts, settings as settings_api, cash as cash_api
 from app.scheduler.jobs import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_tables():
-    from app.models import Position, ExpertRecommendation, ConsensusDecision, ChatMessage, UserSettings  # noqa
+    from app.models import Position, ExpertRecommendation, ConsensusDecision, ChatMessage, UserSettings, CashBalance  # noqa
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created/verified.")
 
@@ -54,6 +54,7 @@ app.include_router(recommendations.router)
 app.include_router(chat.router)
 app.include_router(experts.router)
 app.include_router(settings_api.router)
+app.include_router(cash_api.router)
 
 
 @app.get("/api/health")

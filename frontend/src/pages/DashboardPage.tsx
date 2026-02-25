@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
-import { getPortfolio, getSettings, refreshRecommendations, refreshAllRecommendations } from '../services/api';
+import { getPortfolio, getSettings, refreshRecommendations, refreshAllRecommendations, updateCash } from '../services/api';
 import type { Portfolio, UserSettings, PortfolioPosition } from '../types';
 import { PortfolioHeader } from '../components/Dashboard/PortfolioHeader';
 import { PositionsTable } from '../components/Dashboard/PositionsTable';
@@ -79,6 +79,11 @@ export function DashboardPage({ onNavigateToChat }: Props) {
     setSellTarget({ ticker, totalQuantity, currentPrice });
   };
 
+  const handleCashUpdate = async (amount: number) => {
+    await updateCash(amount);
+    await load();
+  };
+
   const selectedPosition = portfolio?.positions.find(p => p.id === selectedPositionId);
 
   if (loading) return <LoadingSpinner size="lg" />;
@@ -107,7 +112,7 @@ export function DashboardPage({ onNavigateToChat }: Props) {
 
   return (
     <div>
-      <PortfolioHeader portfolio={portfolio} riskProfile={settings.risk_profile} />
+      <PortfolioHeader portfolio={portfolio} riskProfile={settings.risk_profile} onCashUpdate={handleCashUpdate} />
 
       {refreshError && (
         <div className="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center justify-between">
